@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CropGuard AI - Prototype</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        #map {
+            height: 300px;
+            border-radius: 1rem;
+        }
+
+        .loader {
+            border-top-color: #3498db;
+            animation: spinner 1.5s linear infinite;
+        }
+
+        @keyframes spinner {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .animate-fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 text-slate-900 font-sans">
+
+    <nav class="bg-emerald-600 text-white p-4 shadow-lg">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-2xl font-bold flex items-center gap-2">🌿 CropGuard AI</h1>
+            <div class="flex gap-4 items-center">
+                <select id="langSelect"
+                    class="bg-emerald-700 text-white text-sm rounded-lg p-1 outline-none border border-emerald-500">
+                    <option value="en">English</option>
+                    <option value="hi">हिन्दी</option>
+                    <option value="mr">मराठी</option>
+                </select>
+                <span class="text-sm opacity-80">v1.2</span>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+        <!-- Left: Capture and Diagnosis -->
+        <div class="space-y-6">
+            <!-- Controls Panel -->
+            <div
+                class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label id="labelWeather" class="block text-sm font-medium text-slate-600 mb-1">Weather</label>
+                    <select id="weatherSelect"
+                        class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm outline-none focus:ring-2 ring-emerald-500">
+                        <option value="auto">Auto (Live API)</option>
+                        <option value="sunny">Sunny</option>
+                        <option value="humid">Humid</option>
+                        <option value="rainy">Rainy</option>
+                    </select>
+                </div>
+                <div class="space-y-3 mt-6">
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" id="offlineToggle"
+                            class="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500">
+                        <label id="labelOffline" class="text-sm font-medium text-slate-600 cursor-pointer">Offline
+                            Mode</label>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button id="edgeModeToggle"
+                            class="px-3 py-1 rounded-full text-xs font-bold transition-all bg-slate-200 text-slate-600 border border-slate-300">
+                            🌐 Online Mode
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 id="labelDiagnosis" class="text-xl font-semibold mb-4">Disease Diagnosis</h2>
+                <div class="relative bg-black rounded-xl overflow-hidden aspect-video mb-4">
+                    <video id="webcam" autoplay playsinline class="w-full h-full object-cover"></video>
+                    <canvas id="canvas" class="hidden"></canvas>
+                </div>
+                <div class="flex gap-3">
+                    <button id="captureBtn"
+                        class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl transition-all transform active:scale-95">
+                        📸 Capture & Diagnose
+                    </button>
+                </div>
+            </div>
+
+            <div id="resultCard"
+                class="hidden bg-white p-6 rounded-2xl shadow-sm border border-slate-200 animate-fade-in">
+                <div class="flex justify-between items-start mb-4">
+                    <div>
+                        <span id="statusBadge"
+                            class="px-3 py-1 rounded-full text-xs font-bold uppercase mb-2 inline-block"></span>
+                        <h3 id="diagnosisText" class="text-3xl font-bold">...</h3>
+                        <p id="confidenceText" class="text-slate-500"></p>
+                    </div>
+                    <div class="flex gap-2">
+                        <button id="speakBtn" class="p-2 bg-slate-100 rounded-full hover:bg-slate-200">🔊</button>
+                        <button id="reportBtn"
+                            class="px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-lg hover:bg-red-600 transition-all">🚩
+                            Report Outbreak</button>
+                    </div>
+                </div>
+                <div id="treatmentBox" class="mt-6 p-4 bg-emerald-50 rounded-xl border border-emerald-100">
+                    <h4 id="labelTreatment" class="font-bold text-emerald-800 mb-2">Treatment Advisory:</h4>
+                    <p id="treatmentText" class="text-emerald-700 text-sm italic">Fetching advisory...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Outbreaks and Map -->
+        <div class="space-y-6">
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 id="labelOutbreaks" class="text-xl font-semibold">Regional Outbreaks</h2>
+                    <span id="syncStatus"
+                        class="text-[10px] font-mono px-2 py-1 rounded bg-slate-100 text-slate-500">Synced</span>
+                </div>
+                <div id="map" class="shadow-inner bg-slate-100"></div>
+                <div class="mt-4 grid grid-cols-3 gap-2 text-center">
+                    <div class="p-2 bg-red-100 text-red-700 rounded-lg text-xs font-bold" id="labelHigh">High Risk</div>
+                    <div class="p-2 bg-yellow-100 text-yellow-700 rounded-lg text-xs font-bold" id="labelMed">Medium
+                        Risk</div>
+                    <div class="p-2 bg-green-100 text-green-700 rounded-lg text-xs font-bold" id="labelLow">Low Risk
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const API_BASE = "http://localhost:8000";
+
+        const translations = {
+            en: {
+                diagnosis: "Disease Diagnosis",
+                capture: "📸 Capture & Diagnose",
+                analyzing: "Analyzing... ⏳",
+                confidence: "Confidence",
+                treatment: "Treatment Advisory:",
+                fetching: "Fetching advisory...",
+                outbreaks: "Regional Outbreaks",
+                high: "High Risk",
+                med: "Medium Risk",
+                low: "Low Risk",
+                weather: "Weather",
+                offline: "Offline Mode",
+                healthy: "Healthy",
+                warning: "Warning",
+                report: "🚩 Report Outbreak",
+                synced: "Synced",
+                syncing: "Syncing...",
+                pending: "Pending Sync",
+                edgeMode: "🌐 Edge Mode",
+                onlineMode: "🌐 Online Mode"
+            },
+            hi: {
+                diagnosis: "रोग निदान",
+                capture: "📸 फोटो लें और निदान करें",
+                analyzing: "विश्लेषण कर रहा है... ⏳",
+                confidence: "विश्वास",
+                treatment: "उपचार सलाह:",
+                fetching: "सलाह प्राप्त की जा रही है...",
+                outbreaks: "क्षेत्रीय प्रकोप",
+                high: "उच्च जोखिम",
+                med: "मध्यम जोखिम",
+                low: "कम जोखिम",
+                weather: "मौसम",
+                offline: "ऑफलाइन मोड",
+                healthy: "स्वस्थ",
+                warning: "चेतावनी",
+                report: "🚩 प्रकोप रिपोर्ट करें",
+                synced: "सिंक्रोनाइज़्ड",
+                syncing: "सिंक हो रहा है...",
+                pending: "सिंक लंबित",
+                edgeMode: "🌐 एज मोड",
+                onlineMode: "🌐 ऑनलाइन मोड"
+            },
+            mr: {
+                diagnosis: "रोग निदान",
+                capture: "📸 फोटो काढा आणि निदान करा",
+                analyzing: "विश्लेषण करत आहे... ⏳",
+                confidence: "आत्मविश्वास",
+                treatment: "उपचार सल्ला:",
+                fetching: "सल्ला मिळवत आहे...",
+                outbreaks: "प्रादेशिक उद्रेक",
+                high: "उच्च जोखीम",
+                med: "मध्यम जोखीम",
+                low: "कमी जोखीम",
+                weather: "हवामान",
+                offline: "ऑफलाइन मोड",
+                healthy: "निरोगी",
+                warning: "चेतावणी",
+                report: "🚩 उद्रेक रिपोर्ट करा",
+                synced: "सिंक्रोनाइज़्ड",
+                syncing: "सिंक होत आहे...",
+                pending: "सिंक प्रलंबित",
+                edgeMode: "🌐 एज मोड",
+                onlineMode: "🌐 ऑनलाइन मोड"
+            }
+        };
+
+        const weatherPresets = {
+            sunny: { temp: 32, wind: 5 },
+            humid: { temp: 24, wind: 10 },
+            rainy: { temp: 18, wind: 15 }
+        };
+
+        const webcam = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const captureBtn = document.getElementById('captureBtn');
+        const resultCard = document.getElementById('resultCard');
+        const diagnosisText = document.getElementById('diagnosisText');
+        const confidenceText = document.getElementById('confidenceText');
+        const statusBadge = document.getElementById('statusBadge');
+        const treatmentText = document.getElementById('treatmentText');
+        const speakBtn = document.getElementById('speakBtn');
+        const reportBtn = document.getElementById('reportBtn');
+        const langSelect = document.getElementById('langSelect');
+        const weatherSelect = document.getElementById('weatherSelect');
+        const offlineToggle = document.getElementById('offlineToggle');
+        const edgeModeToggle = document.getElementById('edgeModeToggle');
+        const syncStatus = document.getElementById('syncStatus');
+
+        let currentLang = 'en';
+        let isEdgeMode = false;
+
+        function updateUIStrings() {
+            const t = translations[currentLang];
+            document.getElementById('labelDiagnosis').innerText = t.diagnosis;
+            captureBtn.innerText = t.capture;
+            document.getElementById('labelTreatment').innerText = t.treatment;
+            document.getElementById('labelOutbreaks').innerText = t.outbreaks;
+            document.getElementById('labelHigh').innerText = t.high;
+            document.getElementById('labelMed').innerText = t.med;
+            document.getElementById('labelLow').innerText = t.low;
+            document.getElementById('labelWeather').innerText = t.weather;
+            document.getElementById('labelOffline').innerText = t.offline;
+            reportBtn.innerText = t.report;
+            updateEdgeModeUI();
+        }
+
+        function updateEdgeModeUI() {
+            const t = translations[currentLang];
+            edgeModeToggle.innerText = isEdgeMode ? t.edgeMode : t.onlineMode;
+            edgeModeToggle.className = isEdgeMode
+                ? "px-3 py-1 rounded-full text-xs font-bold transition-all bg-emerald-500 text-white border border-emerald-600"
+                : "px-3 py-1 rounded-full text-xs font-bold transition-all bg-slate-200 text-slate-600 border border-slate-300";
+        }
+
+        langSelect.onchange = () => {
+            currentLang = langSelect.value;
+            updateUIStrings();
+        };
+
+        edgeModeToggle.onclick = () => {
+            isEdgeMode = !isEdgeMode;
+            updateEdgeModeUI();
+        };
+
+        // Store and Forward Logic
+        function saveToQueue(type, data) {
+            const queue = JSON.parse(localStorage.getItem('crop_queue') || '[]');
+            queue.push({ type, data, timestamp: new Date().toISOString() });
+            localStorage.setItem('crop_queue', JSON.stringify(queue));
+            updateSyncStatus();
+        }
+
+        function updateSyncStatus() {
+            const queue = JSON.parse(localStorage.getItem('crop_queue') || '[]');
+            const t = translations[currentLang];
+            if (queue.length === 0) {
+                syncStatus.innerText = t.synced;
+                syncStatus.className = "text-[10px] font-mono px-2 py-1 rounded bg-slate-100 text-slate-500";
+            } else {
+                syncStatus.innerText = t.pending;
+                syncStatus.className = "text-[10px] font-mono px-2 py-1 rounded bg-yellow-100 text-yellow-700";
+            }
+        }
+
+        async function syncData() {
+            if (!navigator.onLine || isEdgeMode) return;
+
+            const queue = JSON.parse(localStorage.getItem('crop_queue') || '[]');
+            if (queue.length === 0) return;
+
+            const t = translations[currentLang];
+            syncStatus.innerText = t.syncing;
+            syncStatus.className = "text-[10px] font-mono px-2 py-1 rounded bg-blue-100 text-blue-700";
+
+            const remainingQueue = [];
+            for (const item of queue) {
+                try {
+                    if (item.type === 'outbreak') {
+                        const res = await fetch(`${API_BASE}/outbreaks`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(item.data)
+                        });
+                        if (!res.ok) throw new Error("Sync failed");
+                    }
+                } catch (e) {
+                    remainingQueue.push(item);
+                }
+            }
+
+            localStorage.setItem('crop_queue', JSON.stringify(remainingQueue));
+            updateSyncStatus();
+        }
+
+        window.addEventListener('online', syncData);
+
+        async function initWebcam() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+                webcam.srcObject = stream;
+            } catch (e) {
+                alert("Webcam access denied or not available");
+            }
+        }
+
+        const map = L.map('map').setView([12.9716, 77.5946], 10);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+        async function loadOutbreaks() {
+            try {
+                const res = await fetch(`${API_BASE}/outbreaks`);
+                const data = await res.json();
+                data.features.forEach(f => {
+                    const color = f.properties.severity === 'High' ? 'red' : (f.properties.severity === 'Medium' ? 'orange' : 'green');
+                    L.circleMarker(f.geometry.coordinates, { color: color, radius: 8 }).addTo(map)
+                        .bindPopup(`<b>${f.properties.disease}</b><br>Severity: ${f.properties.severity}`);
+                });
+            } catch (e) { console.error("Outbreak load failed"); }
+        }
+
+        captureBtn.onclick = async () => {
+            const t = translations[currentLang];
+            captureBtn.innerText = t.analyzing;
+            captureBtn.disabled = true;
+
+            canvas.width = webcam.videoWidth;
+            canvas.height = webcam.videoHeight;
+            canvas.getContext('2d').drawImage(webcam, 0, 0);
+
+            canvas.toBlob(async (blob) => {
+                const formData = new FormData();
+                formData.append('file', blob, 'capture.jpg');
+
+                try {
+                    const res = await fetch(`${API_BASE}/predict`, { method: 'POST', body: formData });
+                    const data = await res.json();
+
+                    diagnosisText.innerText = data.diagnosis;
+                    confidenceText.innerText = `${t.confidence}: ${data.confidence}`;
+                    statusBadge.innerText = translations[currentLang][data.status.toLowerCase()] || data.status;
+                    statusBadge.className = `px-3 py-1 rounded-full text-xs font-bold uppercase mb-2 inline-block ${data.status === 'Healthy' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`;
+
+                    resultCard.classList.remove('hidden');
+
+                    // Store recent diagnosis locally
+                    saveToQueue('diagnosis', {
+                        disease: data.diagnosis,
+                        confidence: data.confidence,
+                        timestamp: new Date().toISOString()
+                    });
+
+                    const advisoryPayload = {
+                        diagnosis: data.diagnosis,
+                        lat: 0, lon: 0
+                    };
+
+                    const selectedWeather = weatherSelect.value;
+                    if (offlineToggle.checked || isEdgeMode || selectedWeather !== 'auto') {
+                        const preset = weatherPresets[selectedWeather] || { temp: 25, wind: 5 };
+                        advisoryPayload.manual_weather = preset;
+                    } else {
+                        navigator.geolocation.getCurrentPosition(async (pos) => {
+                            advisoryPayload.lat = pos.coords.latitude;
+                            advisoryPayload.lon = pos.coords.longitude;
+                            await fetchAdvisory(advisoryPayload);
+                        }, async () => {
+                            advisoryPayload.manual_weather = { temp: 25, wind: 5 };
+                            await fetchAdvisory(advisoryPayload);
+                        });
+                        return;
+                    }
+                    await fetchAdvisory(advisoryPayload);
+
+                } catch (e) {
+                    alert("Server error. Make sure backend is running.");
+                } finally {
+                    captureBtn.innerText = t.capture;
+                    captureBtn.disabled = false;
+                }
+            }, 'image/jpeg');
+        };
+
+        reportBtn.onclick = async () => {
+            navigator.geolocation.getCurrentPosition(async (pos) => {
+                const report = {
+                    type: "Feature",
+                    geometry: { type: "Point", coordinates: [pos.coords.longitude, pos.coords.latitude] },
+                    properties: { disease: diagnosisText.innerText, severity: "Medium", reported_at: new Date().toISOString() }
+                };
+
+                if (!navigator.onLine || isEdgeMode) {
+                    saveToQueue('outbreak', report);
+                    alert("Offline: Outbreak report queued for sync.");
+                } else {
+                    try {
+                        const res = await fetch(`${API_BASE}/outbreaks`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(report)
+                        });
+                        if (res.ok) alert("Outbreak reported successfully!");
+                    } catch (e) {
+                        saveToQueue('outbreak', report);
+                        alert("Connection failed. Report queued for sync.");
+                    }
+                }
+            }, () => {
+                alert("Location access required to report outbreak.");
+            });
+        };
+
+        async function fetchAdvisory(payload) {
+            try {
+                const res = await fetch(`${API_BASE}/advisory`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const advData = await res.json();
+                treatmentText.innerText = advData.treatment;
+            } catch (e) {
+                treatmentText.innerText = "Offline: Unable to reach server. Please apply organic Neem oil as a general precaution.";
+            }
+        }
+
+        speakBtn.onclick = () => {
+            const t = translations[currentLang];
+            const msg = new SpeechSynthesisUtterance(`${diagnosisText.innerText}. ${treatmentText.innerText}`);
+            const langMap = { en: 'en-US', hi: 'hi-IN', mr: 'mr-IN' };
+            msg.lang = langMap[currentLang] || 'en-US';
+            window.speechSynthesis.speak(msg);
+        };
+
+        initWebcam();
+        loadOutbreaks();
+        updateUIStrings();
+        updateSyncStatus();
+
+        // Initial sync attempt
+        syncData();
+    </script>
+</body>
+
+</html>
