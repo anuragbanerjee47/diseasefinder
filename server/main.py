@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 try:
     import tensorflow as tf
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     tf = None
 from PIL import Image
 import io
