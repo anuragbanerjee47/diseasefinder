@@ -35,9 +35,16 @@ labels = {}
 
 def load_assets():
     global interpreter, labels
-    if os.path.exists(MODEL_PATH):
-        interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
-        interpreter.allocate_tensors()
+    if tf is not None and os.path.exists(MODEL_PATH):
+        try:
+            interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
+            interpreter.allocate_tensors()
+        except Exception as e:
+            print(f"Error initializing model: {e}")
+            interpreter = None
+    else:
+        interpreter = None
+
     if os.path.exists(LABELS_PATH):
         with open(LABELS_PATH, "r") as f:
             labels = json.load(f)
