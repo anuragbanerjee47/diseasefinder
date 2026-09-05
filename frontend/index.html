@@ -14,21 +14,6 @@
             border-radius: 1rem;
         }
 
-        .loader {
-            border-top-color: #3498db;
-            animation: spinner 1.5s linear infinite;
-        }
-
-        @keyframes spinner {
-            0% {
-                transform: rotate(0deg);
-            }
-
-            100% {
-                transform: rotate(360deg);
-            }
-        }
-
         .animate-fade-in {
             animation: fadeIn 0.3s ease-in;
         }
@@ -371,11 +356,9 @@
                     console.warn("Camera constraint mode not available:", constraints, err);
                 }
             }
-
-            console.warn("No active camera found. Switching to file upload mode.");
         }
 
-        // Handle direct file uploads
+        // Direct file uploads
         uploadBtn.onclick = () => fileUpload.click();
 
         fileUpload.onchange = (e) => {
@@ -430,7 +413,8 @@
                     throw new Error(data.detail || "Prediction failed");
                 }
 
-                diagnosisText.innerText = data.prediction?.label || "Diagnosis Complete";
+                const diseaseName = data.prediction?.label || "Healthy Crop";
+                diagnosisText.innerText = diseaseName;
                 confidenceText.innerText = `${Math.round((data.prediction?.confidence || 0) * 100)}%`;
 
                 if (statusBadge) {
@@ -441,15 +425,14 @@
                 resultCard.classList.remove('hidden');
 
                 saveToQueue('diagnosis', {
-                    disease: data.prediction?.label,
+                    disease: diseaseName,
                     confidence: data.prediction?.confidence,
                     timestamp: new Date().toISOString()
                 });
 
                 // Fetch Advisory
                 const advisoryPayload = {
-                    crop: "Generic Crop",
-                    disease: data.prediction?.label || "Unknown",
+                    disease: diseaseName,
                     weather: weatherPresets[weatherSelect.value] || { temp: 25, wind: 5 }
                 };
                 await fetchAdvisory(advisoryPayload);
@@ -525,7 +508,7 @@
                 const advData = await res.json();
                 treatmentText.innerText = advData.treatment || "No specific treatment required.";
             } catch (e) {
-                treatmentText.innerText = "Offline: Unable to reach advisory server. Neem oil or standard fungicide recommended.";
+                treatmentText.innerText = "Offline: Unable to reach advisory server. Standard bio-fungicide recommended.";
             }
         }
 
