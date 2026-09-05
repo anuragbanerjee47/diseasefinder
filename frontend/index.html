@@ -99,14 +99,23 @@
 
             <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                 <h2 id="labelDiagnosis" class="text-xl font-semibold mb-4">Disease Diagnosis</h2>
-                <div class="relative bg-black rounded-xl overflow-hidden aspect-video mb-4">
-                    <video id="webcam" autoplay playsinline class="w-full h-full object-cover"></video>
+                <div
+                    class="relative bg-black rounded-xl overflow-hidden aspect-video mb-4 flex items-center justify-center">
+                    <video id="webcam" autoplay playsinline muted class="w-full h-full object-cover"></video>
+                    <img id="imagePreview" class="hidden w-full h-full object-cover" alt="Preview">
                     <canvas id="canvas" class="hidden"></canvas>
                 </div>
-                <div class="flex gap-3">
+
+                <input type="file" id="fileUpload" accept="image/*" class="hidden">
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button id="captureBtn"
-                        class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl transition-all transform active:scale-95">
+                        class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-4 rounded-xl transition-all transform active:scale-95 flex items-center justify-center gap-2">
                         📸 Capture & Diagnose
+                    </button>
+                    <button id="uploadBtn"
+                        class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 px-4 rounded-xl transition-all transform active:scale-95 flex items-center justify-center gap-2">
+                        📁 Upload Leaf Photo
                     </button>
                 </div>
             </div>
@@ -161,6 +170,7 @@
             en: {
                 diagnosis: "Disease Diagnosis",
                 capture: "📸 Capture & Diagnose",
+                upload: "📁 Upload Leaf Photo",
                 analyzing: "Analyzing... ⏳",
                 confidence: "Confidence",
                 treatment: "Treatment Advisory:",
@@ -183,6 +193,7 @@
             hi: {
                 diagnosis: "रोग निदान",
                 capture: "📸 फोटो लें और निदान करें",
+                upload: "📁 फोटो अपलोड करें",
                 analyzing: "विश्लेषण कर रहा है... ⏳",
                 confidence: "विश्वास",
                 treatment: "उपचार सलाह:",
@@ -205,6 +216,7 @@
             mr: {
                 diagnosis: "रोग निदान",
                 capture: "📸 फोटो काढा आणि निदान करा",
+                upload: "📁 फोटो अपलोड करा",
                 analyzing: "विश्लेषण करत आहे... ⏳",
                 confidence: "आत्मविश्वास",
                 treatment: "उपचार सल्ला:",
@@ -233,8 +245,11 @@
         };
 
         const webcam = document.getElementById('webcam');
+        const imagePreview = document.getElementById('imagePreview');
         const canvas = document.getElementById('canvas');
         const captureBtn = document.getElementById('captureBtn');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const fileUpload = document.getElementById('fileUpload');
         const resultCard = document.getElementById('resultCard');
         const diagnosisText = document.getElementById('diagnosisText');
         const confidenceText = document.getElementById('confidenceText');
@@ -250,11 +265,13 @@
 
         let currentLang = 'en';
         let isEdgeMode = false;
+        let activeImageFile = null;
 
         function updateUIStrings() {
             const t = translations[currentLang];
             document.getElementById('labelDiagnosis').innerText = t.diagnosis;
             captureBtn.innerText = t.capture;
+            uploadBtn.innerText = t.upload;
             document.getElementById('labelTreatment').innerText = t.treatment;
             document.getElementById('labelOutbreaks').innerText = t.outbreaks;
             document.getElementById('labelHigh').innerText = t.high;
@@ -284,7 +301,6 @@
             updateEdgeModeUI();
         };
 
-        // Store and Forward Logic
         function saveToQueue(type, data) {
             const queue = JSON.parse(localStorage.getItem('crop_queue') || '[]');
             queue.push({ type, data, timestamp: new Date().toISOString() });
@@ -336,14 +352,44 @@
 
         window.addEventListener('online', syncData);
 
+        // Robust camera initialization with fallback
         async function initWebcam() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-                webcam.srcObject = stream;
-            } catch (e) {
-                alert("Webcam access denied or not available");
+            const constraintsList = [
+                { video: { facingMode: { ideal: "environment" } } },
+                { video: true }
+            ];
+
+            for (const constraints of constraintsList) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    webcam.srcObject = stream;
+                    await webcam.play();
+                    webcam.classList.remove('hidden');
+                    imagePreview.classList.add('hidden');
+                    return;
+                } catch (err) {
+                    console.warn("Camera constraint mode not available:", constraints, err);
+                }
             }
+
+            console.warn("No active camera found. Switching to file upload mode.");
         }
+
+        // Handle direct file uploads
+        uploadBtn.onclick = () => fileUpload.click();
+
+        fileUpload.onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            activeImageFile = file;
+            const url = URL.createObjectURL(file);
+            imagePreview.src = url;
+            imagePreview.classList.remove('hidden');
+            webcam.classList.add('hidden');
+
+            runPrediction(file);
+        };
 
         const map = L.map('map').setView([12.9716, 77.5946], 10);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
@@ -351,78 +397,92 @@
         async function loadOutbreaks() {
             try {
                 const res = await fetch(`${API_BASE}/outbreaks`);
+                if (!res.ok) return;
                 const data = await res.json();
-                data.features.forEach(f => {
-                    const color = f.properties.severity === 'High' ? 'red' : (f.properties.severity === 'Medium' ? 'orange' : 'green');
-                    L.circleMarker(f.geometry.coordinates, { color: color, radius: 8 }).addTo(map)
-                        .bindPopup(`<b>${f.properties.disease}</b><br>Severity: ${f.properties.severity}`);
-                });
-            } catch (e) { console.error("Outbreak load failed"); }
-        }
-
-        captureBtn.onclick = async () => {
-            canvas.toBlob(async (blob) => {
-                const formData = new FormData();
-                formData.append("file", blob, "capture.jpg");
-
-                try {
-                    const API_BASE = "https://diseasefinder.onrender.com";
-                    const res = await fetch(`${API_BASE}/predict`, {
-                        method: 'POST',
-                        body: formData
+                if (data && data.features) {
+                    data.features.forEach(f => {
+                        const color = f.properties.severity === 'High' ? 'red' : (f.properties.severity === 'Medium' ? 'orange' : 'green');
+                        L.circleMarker(f.geometry.coordinates, { color: color, radius: 8 }).addTo(map)
+                            .bindPopup(`<b>${f.properties.disease}</b><br>Severity: ${f.properties.severity}`);
                     });
-                    const data = await res.json();
-
-                    if (!res.ok) {
-                        throw new Error(data.detail || "Prediction failed");
-                    }
-
-                    diagnosisText.innerText = data.prediction?.label || "Diagnosis Complete";
-                    confidenceText.innerText = `${Math.round((data.prediction?.confidence || 0) * 100)}%`;
-
-                    if (statusBadge) {
-                        statusBadge.innerText = "Analyzed";
-                        statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold uppercase mb-2 inline-block bg-emerald-100 text-emerald-800";
-                    }
-
-                    resultCard.classList.remove('hidden');
-
-                    // Store recent diagnosis locally
-                    saveToQueue('diagnosis', {
-                        disease: data.prediction?.label,
-                        confidence: data.prediction?.confidence,
-                        timestamp: new Date().toISOString()
-                    });
-                } catch (err) {
-                    console.error("Inference Error:", err);
-                    alert("Error diagnosing crop: " + err.message);
                 }
-            }, "image/jpeg");
-        };
-
-        const selectedWeather = weatherSelect.value;
-        if (offlineToggle.checked || isEdgeMode || selectedWeather !== 'auto') {
-            const preset = weatherPresets[selectedWeather] || { temp: 25, wind: 5 };
-            advisoryPayload.manual_weather = preset;
-        } else {
-            navigator.geolocation.getCurrentPosition(async (pos) => {
-                advisoryPayload.lat = pos.coords.latitude;
-                advisoryPayload.lon = pos.coords.longitude;
-                await fetchAdvisory(advisoryPayload);
-            }, async () => {
-                advisoryPayload.manual_weather = { temp: 25, wind: 5 };
-                await fetchAdvisory(advisoryPayload);
-            });
-            return;
+            } catch (e) {
+                console.warn("Outbreak map data not reachable.");
+            }
         }
-        await fetchAdvisory(advisoryPayload);
 
-                } catch (e) {
-            alert("Server error. Make sure backend is running.");
-        } finally {
-            captureBtn.innerText = t.capture;
-            captureBtn.disabled = false;
+        async function runPrediction(blobOrFile) {
+            const t = translations[currentLang];
+            captureBtn.innerText = t.analyzing;
+            captureBtn.disabled = true;
+
+            const formData = new FormData();
+            formData.append("file", blobOrFile, "leaf.jpg");
+
+            try {
+                const res = await fetch(`${API_BASE}/predict`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(data.detail || "Prediction failed");
+                }
+
+                diagnosisText.innerText = data.prediction?.label || "Diagnosis Complete";
+                confidenceText.innerText = `${Math.round((data.prediction?.confidence || 0) * 100)}%`;
+
+                if (statusBadge) {
+                    statusBadge.innerText = "Analyzed";
+                    statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold uppercase mb-2 inline-block bg-emerald-100 text-emerald-800";
+                }
+
+                resultCard.classList.remove('hidden');
+
+                saveToQueue('diagnosis', {
+                    disease: data.prediction?.label,
+                    confidence: data.prediction?.confidence,
+                    timestamp: new Date().toISOString()
+                });
+
+                // Fetch Advisory
+                const advisoryPayload = {
+                    crop: "Generic Crop",
+                    disease: data.prediction?.label || "Unknown",
+                    weather: weatherPresets[weatherSelect.value] || { temp: 25, wind: 5 }
+                };
+                await fetchAdvisory(advisoryPayload);
+
+            } catch (err) {
+                console.error("Inference Error:", err);
+                alert("Diagnosis Error: " + err.message);
+            } finally {
+                captureBtn.innerText = t.capture;
+                captureBtn.disabled = false;
+            }
         }
+
+        captureBtn.onclick = () => {
+            if (activeImageFile && !imagePreview.classList.contains('hidden')) {
+                runPrediction(activeImageFile);
+                return;
+            }
+
+            if (!webcam.videoWidth) {
+                alert("Camera not ready. Click 'Upload Leaf Photo' instead.");
+                return;
+            }
+
+            canvas.width = webcam.videoWidth;
+            canvas.height = webcam.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
+
+            canvas.toBlob((blob) => {
+                if (blob) {
+                    runPrediction(blob);
+                }
             }, 'image/jpeg');
         };
 
@@ -463,26 +523,24 @@
                     body: JSON.stringify(payload)
                 });
                 const advData = await res.json();
-                treatmentText.innerText = advData.treatment;
+                treatmentText.innerText = advData.treatment || "No specific treatment required.";
             } catch (e) {
-                treatmentText.innerText = "Offline: Unable to reach server. Please apply organic Neem oil as a general precaution.";
+                treatmentText.innerText = "Offline: Unable to reach advisory server. Neem oil or standard fungicide recommended.";
             }
         }
 
         speakBtn.onclick = () => {
-            const t = translations[currentLang];
             const msg = new SpeechSynthesisUtterance(`${diagnosisText.innerText}. ${treatmentText.innerText}`);
             const langMap = { en: 'en-US', hi: 'hi-IN', mr: 'mr-IN' };
             msg.lang = langMap[currentLang] || 'en-US';
             window.speechSynthesis.speak(msg);
         };
 
+        // Initialize UI and dependencies
         initWebcam();
         loadOutbreaks();
         updateUIStrings();
         updateSyncStatus();
-
-        // Initial sync attempt
         syncData();
     </script>
 </body>
