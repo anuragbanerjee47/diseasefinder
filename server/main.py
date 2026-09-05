@@ -4,6 +4,7 @@ import os
 import numpy as np
 from PIL import Image
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from ai_edge_litert.interpreter import Interpreter
 
@@ -50,6 +51,15 @@ def preprocess_image(image_bytes: bytes, target_size=(224, 224)):
 
 
 @app.get("/")
+def serve_ui():
+    frontend_path = os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", "frontend", "index.html"))
+    if os.path.exists(frontend_path):
+        return FileResponse(frontend_path)
+    return {"status": "online", "model_loaded": interpreter is not None, "classes_registered": len(labels)}
+
+
+@app.get("/health")
 def health_check():
     return {
         "status": "online",
