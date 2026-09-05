@@ -1,169 +1,111 @@
-import os
-import json
-import numpy as np
-import requests
-from fastapi import FastAPI, UploadFile, File
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-try:
-    import tensorflow as tf
-except (ImportError, ModuleNotFoundError):
-    tf = None
-from PIL import Image
 import io
+import json
+import os
+import numpy as np
+from PIL import Image
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from ai_edge_litert.interpreter import Interpreter
 
-app = FastAPI()
+from server.soil_knowledge import evaluate_soil_health
 
-# Enable CORS for frontend access
+app = FastAPI(title="CropGuard AI Backend")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Load TFLite model and labels
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "crop_model.tflite")
 LABELS_PATH = os.path.join(BASE_DIR, "labels.json")
 
-# Load model globally to avoid repeated loading
+# Load labels
+labels = []
+if os.path.exists(LABELS_PATH):
+    with open(LABELS_PATH, "r", encoding="utf-8") as f:
+        labels = json.load(f)
+
+# Load TFLite interpreter using LiteRT
 interpreter = None
-labels = {}
+input_details = None
+output_details = None
 
-
-def load_assets():
-    global interpreter, labels
-    if tf is not None and os.path.exists(MODEL_PATH):
-        try:
-            interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
-            interpreter.allocate_tensors()
-        except Exception as e:
-            print(f"Error initializing model: {e}")
-            interpreter = None
-    else:
-        interpreter = None
-
-    if os.path.exists(LABELS_PATH):
-        with open(LABELS_PATH, "r") as f:
-            labels = json.load(f)
-
-
-load_assets()
-
-
-@app.post("/predict")
-async def predict(file: UploadFile = File(...)):
-    if interpreter is None:
-        return {
-            "prediction": "Plant - Healthy Leaf",
-            "diagnosis": "Plant - Healthy Leaf",
-            "disease": "Healthy Leaf",
-            "disease_name": "Healthy Leaf",
-            "class": "Plant - Healthy Leaf",
-            "class_name": "Plant - Healthy Leaf",
-            "label": "Plant - Healthy Leaf",
-            "crop": "Foliage / Plant",
-            "confidence": 0.98,
-            "treatment": "Plant shows healthy foliage with no evident signs of pathogen damage. Maintain adequate sunlight and irrigation.",
-            "status": "success"
-        }
-
-    # Process image
-    contents = await file.read()
-    image = Image.open(io.BytesIO(contents)).convert("RGB").resize((224, 224))
-    input_data = np.array(image, dtype=np.float32) / 255.0
-    input_data = np.expand_dims(input_data, axis=0)
-
-    # TFLite Inference
+if os.path.exists(MODEL_PATH):
+    interpreter = Interpreter(model_path=MODEL_PATH)
+    interpreter.allocate_tensors()
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    interpreter.set_tensor(input_details[0]['index'], input_data)
+
+def preprocess_image(image_bytes: bytes, target_size=(224, 224)):
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    img = img.resize(target_size)
+    img_array = np.array(img, dtype=np.float32) / 255.0
+    img_array = np.expand_dims(img_array, axis=0)
+    return img_array
+
+
+@app.get("/")
+def health_check():
+    return {
+        "status": "online",
+        "model_loaded": interpreter is not None,
+        "classes_registered": len(labels)
+    }
+
+
+@app.post("/predict")
+async def predict(
+    file: UploadFile = File(...),
+    district: str = Form(""),
+    crop: str = Form("")
+):
+    if not interpreter:
+        raise HTTPException(
+            status_code=500, detail="Inference engine model not initialized.")
+
+    contents = await file.read()
+
+    expected_shape = input_details[0]['shape']
+    height, width = int(expected_shape[1]), int(expected_shape[2])
+
+    input_tensor = preprocess_image(contents, target_size=(height, width))
+
+    if input_details[0]['dtype'] == np.uint8:
+        input_tensor = (input_tensor * 255).astype(np.uint8)
+    elif input_details[0]['dtype'] == np.int8:
+        input_tensor = ((input_tensor - 0.5) * 255).astype(np.int8)
+
+    interpreter.set_tensor(input_details[0]['index'], input_tensor)
     interpreter.invoke()
-    output_data = interpreter.get_tensor(output_details[0]['index'])
 
-    result_idx = np.argmax(output_data[0])
-    confidence = float(np.max(output_data[0]))
-    label = labels.get(str(result_idx), "Unknown")
+    predictions = interpreter.get_tensor(output_details[0]['index'])[0]
+    top_idx = int(np.argmax(predictions))
+    confidence = float(predictions[top_idx])
 
-    return {
-        "diagnosis": label,
-        "confidence": f"{confidence*100:.2f}%",
-        "status": "Warning" if label != "Healthy" else "Healthy"
-    }
-
-
-@app.post("/advisory")
-async def advisory(data: dict):
-    # data expects {"lat": ..., "lon": ..., "diagnosis": ..., "manual_weather": {"temp": ..., "wind": ...}}
-    lat = data.get("lat", 0)
-    lon = data.get("lon", 0)
-    diagnosis = data.get("diagnosis", "Healthy")
-    manual_weather = data.get("manual_weather")
-
-    # Fetch weather from Open-Meteo only if manual weather is not provided
-    if manual_weather:
-        temp = manual_weather.get("temp", 25)
-        wind = manual_weather.get("wind", 5)
-        source = "Manual"
+    if isinstance(labels, dict):
+        disease_label = labels.get(
+            str(top_idx), labels.get(top_idx, f"Class {top_idx}"))
+    elif isinstance(labels, list) and top_idx < len(labels):
+        disease_label = labels[top_idx]
     else:
-        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
-        try:
-            resp = requests.get(weather_url, timeout=5).json()
-            temp = resp["current_weather"]["temperature"]
-            wind = resp["current_weather"]["windspeed"]
-            source = "Live API"
-        except Exception:
-            temp, wind = 25, 5  # Fallbacks
-            source = "Fallback"
+        disease_label = f"Class {top_idx}"
 
-    # Basic Dosage Logic
-    if diagnosis == "Healthy":
-        return {"treatment": "No treatment needed. Maintain organic mulch.", "source": source}
-
-    # High wind prevents spraying
-    if wind > 15:
-        return {"treatment": "Wind speed too high for spraying. Wait for calmer weather.", "source": source}
-
-    # Organic vs Chemical based on temp
-    if temp < 20:
-        treatment = f"Organic Neem Oil spray: 5ml/L. Application preferred in morning."
-    else:
-        treatment = f"Targeted Chemical Fungicide: 2ml/L. Ensure protective gear."
+    soil_report = {}
+    if district:
+        detected_crop = crop or (disease_label.split(
+            "___")[0] if "___" in disease_label else "")
+        soil_report = evaluate_soil_health(
+            district=district, crop=detected_crop)
 
     return {
-        "weather": {"temp": temp, "wind": wind},
-        "treatment": treatment,
-        "recommendation": "Apply in early morning to avoid evaporation.",
-        "source": source
+        "prediction": {
+            "label": disease_label,
+            "confidence": round(confidence, 4)
+        },
+        "soil_analysis": soil_report
     }
-
-
-@app.get("/outbreaks")
-async def outbreaks():
-    # Mock GeoJSON Points
-    return {
-        "type": "FeatureCollection",
-        "features": [
-            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [
-                77.5946, 12.9716]}, "properties": {"disease": "Blight", "severity": "High"}},
-            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [
-                77.6700, 12.9100]}, "properties": {"disease": "Leaf Rust", "severity": "Medium"}},
-            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [
-                77.5000, 13.0000]}, "properties": {"disease": "Aphids", "severity": "Low"}},
-        ]
-    }
-
-
-@app.post("/outbreaks")
-async def report_outbreak(data: dict):
-    # In a real app, this would save to a database
-    print(f"New outbreak reported: {data}")
-    return {"status": "success", "message": "Outbreak reported successfully"}
-
-app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)

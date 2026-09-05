@@ -3,4 +3,4 @@ uvicorn
 python-multipart
 pillow
 numpy
-requests
+ai-edge-litert
