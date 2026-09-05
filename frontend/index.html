@@ -155,7 +155,7 @@
     </main>
 
     <script>
-        const API_BASE = "";
+        const API_BASE = "https://diseasefinder.onrender.com";
 
         const translations = {
             en: {
@@ -361,64 +361,68 @@
         }
 
         captureBtn.onclick = async () => {
-            const t = translations[currentLang];
-            captureBtn.innerText = t.analyzing;
-            captureBtn.disabled = true;
-
-            canvas.width = webcam.videoWidth;
-            canvas.height = webcam.videoHeight;
-            canvas.getContext('2d').drawImage(webcam, 0, 0);
-
             canvas.toBlob(async (blob) => {
                 const formData = new FormData();
-                formData.append('file', blob, 'capture.jpg');
+                formData.append("file", blob, "capture.jpg");
 
                 try {
-                    const res = await fetch(`${API_BASE}/predict`, { method: 'POST', body: formData });
+                    const API_BASE = "https://diseasefinder.onrender.com";
+                    const res = await fetch(`${API_BASE}/predict`, {
+                        method: 'POST',
+                        body: formData
+                    });
                     const data = await res.json();
 
-                    diagnosisText.innerText = data.diagnosis;
-                    confidenceText.innerText = `${t.confidence}: ${data.confidence}`;
-                    statusBadge.innerText = translations[currentLang][data.status.toLowerCase()] || data.status;
-                    statusBadge.className = `px-3 py-1 rounded-full text-xs font-bold uppercase mb-2 inline-block ${data.status === 'Healthy' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`;
+                    if (!res.ok) {
+                        throw new Error(data.detail || "Prediction failed");
+                    }
+
+                    diagnosisText.innerText = data.prediction?.label || "Diagnosis Complete";
+                    confidenceText.innerText = `${Math.round((data.prediction?.confidence || 0) * 100)}%`;
+
+                    if (statusBadge) {
+                        statusBadge.innerText = "Analyzed";
+                        statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold uppercase mb-2 inline-block bg-emerald-100 text-emerald-800";
+                    }
 
                     resultCard.classList.remove('hidden');
 
                     // Store recent diagnosis locally
                     saveToQueue('diagnosis', {
-                        disease: data.diagnosis,
-                        confidence: data.confidence,
+                        disease: data.prediction?.label,
+                        confidence: data.prediction?.confidence,
                         timestamp: new Date().toISOString()
                     });
+                } catch (err) {
+                    console.error("Inference Error:", err);
+                    alert("Error diagnosing crop: " + err.message);
+                }
+            }, "image/jpeg");
+        };
 
-                    const advisoryPayload = {
-                        diagnosis: data.diagnosis,
-                        lat: 0, lon: 0
-                    };
-
-                    const selectedWeather = weatherSelect.value;
-                    if (offlineToggle.checked || isEdgeMode || selectedWeather !== 'auto') {
-                        const preset = weatherPresets[selectedWeather] || { temp: 25, wind: 5 };
-                        advisoryPayload.manual_weather = preset;
-                    } else {
-                        navigator.geolocation.getCurrentPosition(async (pos) => {
-                            advisoryPayload.lat = pos.coords.latitude;
-                            advisoryPayload.lon = pos.coords.longitude;
-                            await fetchAdvisory(advisoryPayload);
-                        }, async () => {
-                            advisoryPayload.manual_weather = { temp: 25, wind: 5 };
-                            await fetchAdvisory(advisoryPayload);
-                        });
-                        return;
-                    }
-                    await fetchAdvisory(advisoryPayload);
+        const selectedWeather = weatherSelect.value;
+        if (offlineToggle.checked || isEdgeMode || selectedWeather !== 'auto') {
+            const preset = weatherPresets[selectedWeather] || { temp: 25, wind: 5 };
+            advisoryPayload.manual_weather = preset;
+        } else {
+            navigator.geolocation.getCurrentPosition(async (pos) => {
+                advisoryPayload.lat = pos.coords.latitude;
+                advisoryPayload.lon = pos.coords.longitude;
+                await fetchAdvisory(advisoryPayload);
+            }, async () => {
+                advisoryPayload.manual_weather = { temp: 25, wind: 5 };
+                await fetchAdvisory(advisoryPayload);
+            });
+            return;
+        }
+        await fetchAdvisory(advisoryPayload);
 
                 } catch (e) {
-                    alert("Server error. Make sure backend is running.");
-                } finally {
-                    captureBtn.innerText = t.capture;
-                    captureBtn.disabled = false;
-                }
+            alert("Server error. Make sure backend is running.");
+        } finally {
+            captureBtn.innerText = t.capture;
+            captureBtn.disabled = false;
+        }
             }, 'image/jpeg');
         };
 
